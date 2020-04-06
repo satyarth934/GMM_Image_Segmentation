@@ -4,6 +4,7 @@ import sys
 import cv2
 import copy
 import numpy as np
+from imutils import contours
 import matplotlib.pyplot as plt
 sys.dont_write_bytecode = True
 
@@ -18,6 +19,11 @@ BINS = 256
 RANGE_MIN = 0
 RANGE_MAX = 256
 
+# Channel Colors
+CHANNEL_COLORS = {"blue": (255,0,0), "green": (0,255,0), "red": (0,0,255)}
+
+# Minimum buoy radius when localizing contours
+MIN_RADIUS_THRESH = 5
 
 def gmm1dUtils(data, num_gaussians, animate=False):
 	if animate:
@@ -157,6 +163,7 @@ def gmm1dInference(test_img, model, channel="red"):
 	probabilities = np.reshape(probabilities, (test_img[:,:,channel_idx].shape))
 
 	probabilities[probabilities>np.max(probabilities)/2.0] = 255
+	probabilities[probabilities!=255] = 0
 	# plt.figure("mask"); plt.imshow(probabilities)
 
 	output = np.zeros((test_img.shape[0], test_img.shape[1], 3))
@@ -167,11 +174,14 @@ def gmm1dInference(test_img, model, channel="red"):
 	# plt.figure("output"); plt.imshow(output)
 	plt.show()
 
-	return (probabilities, output)
+	return (probabilities.astype(np.uint8), output)
 
 
 def main():
 	img = cv2.imread("../Data/Proper_Dataset/orange_buoy/orange_1.jpg")
+
+
+
 	mu, variance, weights = gmm1d(img, num_gaussians=3, channel="red")
 
 	# test_img = cv2.imread("../Data/Proper_Dataset/orange_buoy/orange_15.jpg")
@@ -180,13 +190,23 @@ def main():
 
 	final = test_img[:,:,2] * (res_mask / 255)
 
-	plt.imshow(res_mask)
-	plt.show()
-	cv2.imshow(winname="img", mat=test_img)
-	cv2.imshow(winname="output", mat=final)
-	cv2.waitKey(0)
+	processed = cv2.medianBlur(res_img.astype(np.uint8),3)
+	processed = cv2.Canny(processed,20,255 )
+	mask, cnts, h = cv2.findContours(processed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+	cnts_sorted = sorted(cnts, key=cv2.contourArea, reverse=True)
+	hull = cv2.convexHull(cnts_sorted[0])
+	(x,y),radius = cv2.minEnclosingCircle(hull)
+	
+	print(x,y,radius)
 
-	# detect and draw contours around the bouy
+	if radius > MIN_RADIUS_THRESH:
+		cv2.circle(test_img, (int(x),int(y)-1),int(radius+1), CHANNEL_COLORS["red"], 3)
+		cv2.imshow("Final output",test_img)
+		# images.append(test_img)
+	else:
+		cv2.imshow("Final output",test_img)
+		# images.append(test_img)
+	cv2.waitKey(0)
 
 
 if __name__ == '__main__':
