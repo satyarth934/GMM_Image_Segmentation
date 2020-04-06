@@ -40,6 +40,9 @@ def gmm1dUtils(data, num_gaussians, animate=False):
 	if animate:
 		plt.ion()
 
+	log_likelihood_thresh = 0.000001
+	log_likelihood_prev = 0
+
 	max_itr = 100
 	itr = 0
 	while itr < max_itr:
@@ -81,6 +84,11 @@ def gmm1dUtils(data, num_gaussians, animate=False):
 			plt.show()
 			plt.pause(0.001)
 
+		# print("cluster_prob.shape:", cluster_prob.shape)
+		# cluster_sum = np.sum(cluster_prob,axis=0)
+		# print("cluster_sum.shape:", cluster_sum.shape)
+		# log_likelihood = np.sum(np.log(cluster_sum))
+		# print("log_likelihood:", log_likelihood)
 		if np.sum(np.abs(meansPrev - means)) < 0.1:
 			break
 
@@ -104,7 +112,7 @@ def gmm1d(img, num_gaussians, channel):
 	input_data = input_data[input_data>IGNORE_THRESH].ravel()
 
 	plt.figure("convergence")
-	mu, variance, weights = gmm1dUtils(input_data, num_gaussians=3, animate=True)	# Using only Blue Channel
+	mu, variance, weights = gmm1dUtils(input_data, num_gaussians=3, animate=False)	# Using only Blue Channel
 
 	print("---------- RESULTS -----------")
 	print("mu:", mu)
@@ -114,12 +122,71 @@ def gmm1d(img, num_gaussians, channel):
 	n, hist, _ = plt.hist(input_data, BINS, range=[RANGE_MIN, RANGE_MAX], normed=True, color="blue")
 
 	utils.plotGaussians(hist, mu, variance)
+	utils.plotCombinedGaussians(hist, mu, variance, weights)
 	plt.show()
+
+	return mu, variance, weights
+
+
+def gmm1dInference(test_img, model, channel="red"):
+	mu = model[0]
+	variance = model[1]
+	weights = model[2]
+
+	if channel in ["blue", "Blue", "BLUE", "b", "B"]:
+		channel_idx = 0
+	elif channel in ["green", "Green", "GREEN", "g", "G"]:
+		channel_idx = 1
+	else:
+		channel_idx = 2
+
+	input_data = test_img[:,:,channel_idx]
+	input_data = input_data.ravel()
+	print(input_data.shape)
+	num_gaussians = len(mu)
+
+	likelihood = []
+	for i in range(num_gaussians):
+		likelihood.append(utils.pdf(input_data, mu[i], np.sqrt(variance[i])))
+	likelihood = np.array(likelihood)
+
+	weights.shape = num_gaussians, 1
+	weighted_likelihood = weights * likelihood
+
+	probabilities = np.sum(weighted_likelihood, axis=0)
+	probabilities = np.reshape(probabilities, (test_img[:,:,channel_idx].shape))
+
+	probabilities[probabilities>np.max(probabilities)/2.0] = 255
+	# plt.figure("mask"); plt.imshow(probabilities)
+
+	output = np.zeros((test_img.shape[0], test_img.shape[1], 3))
+	output[:,:,channel_idx] = probabilities
+	# cv2.imshow(winname="output", mat=output)
+	# cv2.waitKey(0)
+
+	# plt.figure("output"); plt.imshow(output)
+	plt.show()
+
+	return (probabilities, output)
 
 
 def main():
 	img = cv2.imread("../Data/Proper_Dataset/orange_buoy/orange_1.jpg")
-	gmm1d(img, num_gaussians=3, channel="red")
+	mu, variance, weights = gmm1d(img, num_gaussians=3, channel="red")
+
+	# test_img = cv2.imread("../Data/Proper_Dataset/orange_buoy/orange_15.jpg")
+	test_img = cv2.imread("../Data/frame_set/buoy_frame_0.jpg")
+	res_mask, res_img = gmm1dInference(test_img, model=(mu, variance, weights), channel="red")
+
+	final = test_img[:,:,2] * (res_mask / 255)
+
+	plt.imshow(res_mask)
+	plt.show()
+	cv2.imshow(winname="img", mat=test_img)
+	cv2.imshow(winname="output", mat=final)
+	cv2.waitKey(0)
+
+	# detect and draw contours around the bouy
 
 
 if __name__ == '__main__':

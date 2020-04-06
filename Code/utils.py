@@ -63,3 +63,18 @@ def dataVisualization(blue_flat, blue_hist, green_flat, green_hist, red_flat, re
 	plt.plot()
 
 
+def plotGaussians(hist, means, variances, plotter=plt):
+	for i in range(len(means)):
+		plotter.plot(hist, pdf(hist, means[i], np.sqrt(variances[i])), color="red")
+
+
+def plotCombinedGaussians(hist, means, variances, weights, plotter=plt):
+	likelihood = []
+	for i in range(len(means)):
+		likelihood.append(pdf(hist, means[i], np.sqrt(variances[i])))
+	likelihood = np.array(likelihood)
+
+	weights.shape = weights.shape[0], 1
+	weighted_likelihood = weights * likelihood
+
+	plotter.plot(hist, np.sum(weighted_likelihood, axis=0), color="green")
