@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import print_function, division
 import os
 import sys
 import cv2
@@ -7,35 +7,20 @@ import numpy as np
 from imutils import contours
 import matplotlib.pyplot as plt
 sys.dont_write_bytecode = True
+# np.seterr(divide='ignore', invalid='ignore')
 
 import utils
 
 
-# Pixels with intensities below this value are ignored
-IGNORE_THRESH = 50
-
-# Bins and Range
-BINS = 256
-RANGE_MIN = 0
-RANGE_MAX = 256
-
-# Channel Colors
-CHANNEL_COLORS = {"blue": (255,0,0), "green": (0,255,0), "red": (0,0,255)}
-
-# Minimum buoy radius when localizing contours
-MIN_RADIUS_THRESH = 5
-
 def gmm1dUtils(data, num_gaussians, animate=False):
 	if animate:
-		n, hist, _ = plt.hist(data, BINS, range=[RANGE_MIN, RANGE_MAX], normed=True, color="blue"
+		n, hist, _ = plt.hist(data, utils.BINS, range=[utils.RANGE_MIN, utils.RANGE_MAX], normed=True, color="blue"
 			)
 	
 	weights = np.ones((num_gaussians)) / num_gaussians 		# init equal weightage to all gaussians
 	means = np.random.choice(data, num_gaussians) 	# k random means from the given dataset
 	meansPrev = np.zeros(num_gaussians) 	# k random means from the given dataset
 	variances = np.random.random_sample(size=num_gaussians) 	# k values from [0,1)
-
-	eps = 0.000001 	# To avoid bad divisions
 
 	print("--- Initializations ---")
 	print("weights:", weights)
@@ -67,11 +52,11 @@ def gmm1dUtils(data, num_gaussians, animate=False):
 		# print("weighted_likelihood:", weighted_likelihood.shape)
 		# print("np.sum(weighted_likelihood, axis=0):", np.sum(weighted_likelihood, axis=0).shape)
 
-		cluster_prob = weighted_likelihood / np.sum(weighted_likelihood, axis=0) + eps 	# P(b|xi)
+		cluster_prob = weighted_likelihood / (np.sum(weighted_likelihood, axis=0) + utils.EPS) 	# P(b|xi)
 		# print("cluster_prob:", cluster_prob.shape)
 
 		meansPrev = means
-		means = np.sum(cluster_prob * data, axis=1) / np.sum(cluster_prob, axis=1) + eps
+		means = np.sum(cluster_prob * data, axis=1) / (np.sum(cluster_prob, axis=1) + utils.EPS)
 		# print("means:", means.shape)
 		# print(means)
 
@@ -79,7 +64,7 @@ def gmm1dUtils(data, num_gaussians, animate=False):
 		# print("means:", means.shape)
 
 		sqdiff = np.subtract(data, means)**2
-		variances = np.sum(cluster_prob * sqdiff, axis=1) / np.sum(cluster_prob, axis=1) + eps
+		variances = np.sum(cluster_prob * sqdiff, axis=1) / (np.sum(cluster_prob, axis=1) + utils.EPS)
 		# print(variances.shape)
 
 		weights = np.sum(cluster_prob, axis=1) / len(data)
@@ -106,7 +91,7 @@ def gmm1dUtils(data, num_gaussians, animate=False):
 	return means, variances, weights
 
 	
-def gmm1d(img, num_gaussians, channel):	
+def gmm1d(img_dir, num_gaussians, channel):	
 	if channel in ["blue", "Blue", "BLUE", "b", "B"]:
 		channel_idx = 0
 	elif channel in ["green", "Green", "GREEN", "g", "G"]:
@@ -114,18 +99,23 @@ def gmm1d(img, num_gaussians, channel):
 	else:
 		channel_idx = 2
 
-	input_data = img[:,:,channel_idx]
-	input_data = input_data[input_data>IGNORE_THRESH].ravel()
+	input_data = utils.generateInputData(img_dir, channel_idx)
+	# input_data = utils.generateData(img_dir)
+	print("input_data.shape:", input_data.shape)
+	# sys.exit(0)
+
+	# input_data = img[:,:,channel_idx]
+	# input_data = input_data[input_data>utils.IGNORE_THRESH].ravel()
 
 	plt.figure("convergence")
-	mu, variance, weights = gmm1dUtils(input_data, num_gaussians=3, animate=False)	# Using only Blue Channel
+	mu, variance, weights = gmm1dUtils(input_data, num_gaussians=3, animate=True)	# Using only Blue Channel
 
 	print("---------- RESULTS -----------")
 	print("mu:", mu)
 	print("variance:", variance)
 	print("weights:", weights)
 
-	n, hist, _ = plt.hist(input_data, BINS, range=[RANGE_MIN, RANGE_MAX], normed=True, color="blue")
+	n, hist, _ = plt.hist(input_data, utils.BINS, range=[utils.RANGE_MIN, utils.RANGE_MAX], normed=True, color="blue")
 
 	utils.plotGaussians(hist, mu, variance)
 	utils.plotCombinedGaussians(hist, mu, variance, weights)
@@ -161,8 +151,10 @@ def gmm1dInference(test_img, model, channel="red"):
 
 	probabilities = np.sum(weighted_likelihood, axis=0)
 	probabilities = np.reshape(probabilities, (test_img[:,:,channel_idx].shape))
+	print("probabilities:", probabilities)
 
-	probabilities[probabilities>np.max(probabilities)/2.0] = 255
+	# probabilities[probabilities>np.max(probabilities)/2.0] = 255
+	probabilities[probabilities>(np.median(probabilities)*2)] = 255
 	probabilities[probabilities!=255] = 0
 	# plt.figure("mask"); plt.imshow(probabilities)
 
@@ -177,37 +169,27 @@ def gmm1dInference(test_img, model, channel="red"):
 	return (probabilities.astype(np.uint8), output)
 
 
-def main():
-	img = cv2.imread("../Data/Proper_Dataset/orange_buoy/orange_1.jpg")
+def testModel(frame_path, img_channel, model):
+	# frame_path = "../Data/frame_set/buoy_frame_0.jpg"
+	# img_channel = "red" | "green" | "blue"
+	mu = model[0]
+	variance = model[1]
+	weights = model[2]
 
+	test_img = cv2.imread(frame_path)
+	res_mask, res_img = gmm1dInference(test_img, model=(mu, variance, weights), channel=img_channel)
+	localized_buoy = utils.localizeBuoy(res_img.astype(np.uint8))	
+	if localized_buoy is not None:
+		(x,y),radius = localized_buoy
+		print(x,y,radius)
 
-
-	mu, variance, weights = gmm1d(img, num_gaussians=3, channel="red")
-
-	# test_img = cv2.imread("../Data/Proper_Dataset/orange_buoy/orange_15.jpg")
-	test_img = cv2.imread("../Data/frame_set/buoy_frame_0.jpg")
-	res_mask, res_img = gmm1dInference(test_img, model=(mu, variance, weights), channel="red")
-
-	final = test_img[:,:,2] * (res_mask / 255)
-
-	processed = cv2.medianBlur(res_img.astype(np.uint8),3)
-	processed = cv2.Canny(processed,20,255 )
-	mask, cnts, h = cv2.findContours(processed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-	cnts_sorted = sorted(cnts, key=cv2.contourArea, reverse=True)
-	hull = cv2.convexHull(cnts_sorted[0])
-	(x,y),radius = cv2.minEnclosingCircle(hull)
-	
-	print(x,y,radius)
-
-	if radius > MIN_RADIUS_THRESH:
-		cv2.circle(test_img, (int(x),int(y)-1),int(radius+1), CHANNEL_COLORS["red"], 3)
-		cv2.imshow("Final output",test_img)
-		# images.append(test_img)
+		if radius > utils.MIN_RADIUS_THRESH:
+			cv2.circle(test_img, (int(x),int(y)-1),int(radius+1), utils.CHANNEL_COLORS["red"], 3)
+			cv2.imshow("Final output",test_img)
+			# images.append(test_img)
+		else:
+			cv2.imshow("Final output",test_img)
+			# images.append(test_img)
+		cv2.waitKey(0)
 	else:
-		cv2.imshow("Final output",test_img)
-		# images.append(test_img)
-	cv2.waitKey(0)
-
-
-if __name__ == '__main__':
-	main()
+		"No detection!!"

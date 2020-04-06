@@ -5,16 +5,34 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+# Pixels with intensities below this value are ignored
+IGNORE_THRESH = 50
+
+# Bins and Range
+BINS = 256
+RANGE_MIN = 0
+RANGE_MAX = 256
+
+# Channel Colors
+CHANNEL_COLORS = {"blue": (255,0,0), "green": (0,255,0), "red": (0,0,255)}
+
+# Minimum buoy radius when localizing contours
+MIN_RADIUS_THRESH = 5
+
+# To avoid bad divisions
+EPS = 0.000001
+
+
 def computeGaussian(x, mu, sigma):
-    return (1 / (sigma * np.sqrt(2 * np.pi)) * np.exp(- (x - mu)**2 / (2 * sigma**2)))
+    return (1 / ((sigma * np.sqrt(2 * np.pi)) * np.exp(- (x - mu)**2 / (2 * sigma**2)) + EPS))
 
 
 # Gaussian Function
 def pdf(data, mean, std):
 	variance = std**2
 	# A normal continuous random variable.
-	s1 = 1/(np.sqrt(2*np.pi*variance))
-	s2 = np.exp(-(np.square(data - mean)/(2*variance)))
+	s1 = 1/(np.sqrt(2*np.pi*variance) + EPS)
+	s2 = np.exp(-(np.square(data - mean)/(2*variance + EPS)))
 	return s1 * s2
 
 
@@ -78,3 +96,48 @@ def plotCombinedGaussians(hist, means, variances, weights, plotter=plt):
 	weighted_likelihood = weights * likelihood
 
 	plotter.plot(hist, np.sum(weighted_likelihood, axis=0), color="green")
+
+
+def generateInputData(img_dir, channel_idx):
+	img_names = os.listdir(img_dir)
+	img_paths = [os.path.join(img_dir, img_name) for img_name in img_names]
+
+	gen_data = np.array([])
+	for img_path in img_paths:
+		img = cv2.imread(img_path)
+		img = img[:,:,channel_idx]
+		img = img[img > IGNORE_THRESH].ravel()
+		gen_data = np.append(gen_data, img)
+
+	return gen_data
+
+
+# def generateData(img_dir):
+#     stack = []
+#     for filename in os.listdir(img_dir):
+#         image = cv2.imread(os.path.join(img_dir,filename))
+#         resized = cv2.resize(image,(40,40),interpolation=cv2.INTER_LINEAR)
+#         image = resized[13:27,13:27]
+#         image = image[:,:,1]
+#         ch = 1
+#         nx = image.shape[0]
+#         ny = image.shape[1]
+#         image = np.reshape(image,(nx*ny,ch))
+       
+#         for i in range(image.shape[0]):
+#             stack.append(image[i,:])
+        
+#     return np.array(stack)
+
+
+def localizeBuoy(res_img):
+	processed = cv2.medianBlur(res_img,3)
+	processed = cv2.Canny(processed,20,255 )
+	mask, cnts, h = cv2.findContours(processed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+	cnts_sorted = sorted(cnts, key=cv2.contourArea, reverse=True)
+	if len(cnts_sorted) > 0:
+		hull = cv2.convexHull(cnts_sorted[0])
+		# (x,y),radius = cv2.minEnclosingCircle(hull)
+		return cv2.minEnclosingCircle(hull)
+	else:
+		return None
